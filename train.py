@@ -171,7 +171,7 @@ def make_train_dataset(args, tokenizer, accelerator):
 def collate_fn(data):
     images = torch.stack([example["image"] for example in data])
     text_input_ids = torch.cat([example["text_input_ids"] for example in data], dim=0)
-    clip_images = torch.cat([example["clip_image"] for example in data], dim=0)
+    clip_images = torch.stack([example["clip_image"] for example in data])
 
     return {
         "images": images,
@@ -530,13 +530,12 @@ def main():
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
                 noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
-            
+                
                 with torch.no_grad():
                     # image_embeds = image_encoder(batch["clip_images"].to(accelerator.device, dtype=weight_dtype)).image_embeds
                     clip_image = clip_image_processor(images=batch["clip_images"], return_tensors="pt").pixel_values
                     image_embeds = image_encoder(clip_image.to(accelerator.device, dtype=torch.float16)).image_embeds
         
-            
                 with torch.no_grad():
                     encoder_hidden_states = text_encoder(batch["text_input_ids"].to(accelerator.device))[0]
                   
