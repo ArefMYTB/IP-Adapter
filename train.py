@@ -15,7 +15,7 @@ from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration
 from diffusers import AutoencoderKL, DDPMScheduler, UNet2DConditionModel
-from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjection
+from transformers import CLIPTextModel, CLIPTokenizer, AutoTokenizer, CLIPVisionModelWithProjection
 from datasets import load_dataset
 from ip_adapter.ip_adapter import ImageProjModel
 from ip_adapter.utils import is_torch2_available
@@ -155,7 +155,6 @@ def make_train_dataset(args, tokenizer, accelerator):
         examples["clip_image"] = conditioning_images
         examples["mask_pixel_value"] = mask_images
         examples["text_input_ids"] = tokenize_captions(examples)
-
         return examples
 
     with accelerator.main_process_first():
@@ -170,7 +169,7 @@ def make_train_dataset(args, tokenizer, accelerator):
 
 def collate_fn(data):
     images = torch.stack([example["image"] for example in data])
-    text_input_ids = torch.cat([example["text_input_ids"] for example in data], dim=0)
+    text_input_ids = torch.stack([example["text_input_ids"] for example in data])
     clip_images = torch.stack([example["clip_image"] for example in data])
 
     return {
@@ -207,7 +206,7 @@ class IPAdapter(torch.nn.Module):
         # image_prompt_embeds = image_prompt_embeds.view(bs_embed * 1, seq_len, -1)
 
         ip_tokens = self.image_proj_model(image_embeds)
-        encoder_hidden_states = torch.cat([encoder_hidden_states, image_prompt_embeds], dim=1)
+        encoder_hidden_states = torch.cat([encoder_hidden_states, ip_tokens], dim=1)
         # Predict the noise residual
         noise_pred = self.unet(noisy_latents, timesteps, encoder_hidden_states).sample
         return noise_pred
@@ -408,6 +407,16 @@ def parse_args():
         default=None,
         help="The directory where the downloaded models and datasets will be stored.",
     )
+    parser.add_argument(
+        "--revision",
+        type=str,
+        default=None,
+        required=False,
+        help=(
+            "Revision of pretrained model identifier from huggingface.co/models. Trainable model components should be"
+            " float32 precision."
+        ),
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -436,6 +445,13 @@ def main():
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDPMScheduler.from_pretrained(args.pretrained_model_name_or_path, subfolder="scheduler")
     tokenizer = CLIPTokenizer.from_pretrained(args.pretrained_model_name_or_path, subfolder="tokenizer")
+    # Load the tokenizer
+    # tokenizer = AutoTokenizer.from_pretrained(
+    #     args.pretrained_model_name_or_path,
+    #     subfolder="tokenizer",
+    #     revision=args.revision,
+    #     use_fast=False,
+    # )
     text_encoder = CLIPTextModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="text_encoder")
     vae = AutoencoderKL.from_pretrained(args.pretrained_model_name_or_path, subfolder="vae")
     unet = UNet2DConditionModel.from_pretrained(args.pretrained_model_name_or_path, subfolder="unet")
@@ -535,9 +551,9 @@ def main():
                     # image_embeds = image_encoder(batch["clip_images"].to(accelerator.device, dtype=weight_dtype)).image_embeds
                     clip_image = clip_image_processor(images=batch["clip_images"], return_tensors="pt").pixel_values
                     image_embeds = image_encoder(clip_image.to(accelerator.device, dtype=torch.float16)).image_embeds
-        
+                    
                 with torch.no_grad():
-                    encoder_hidden_states = text_encoder(batch["text_input_ids"].to(accelerator.device))[0]
+                    encoder_hidden_states = text_encoder(batch["text_input_ids"])[0]
                   
                 noise_pred = ip_adapter(noisy_latents, timesteps, encoder_hidden_states, image_embeds)
         
