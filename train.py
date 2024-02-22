@@ -9,6 +9,7 @@ import time
 import torch
 import torch.nn.functional as F
 from torchvision import transforms
+from torchvision.transforms.functional import pad
 from PIL import Image
 from transformers import CLIPImageProcessor
 from accelerate import Accelerator
@@ -141,14 +142,32 @@ def make_train_dataset(args, tokenizer, accelerator):
         ]
     )
 
+    def resize_with_padding(img, color='white'):
+        expected_size = max(img.width, img.height)
+
+        colors = {
+            'white': (255, 255, 255) if img.mode == "RGB" else 1,
+            'black': (0, 0, 0) if img.mode == "RGB" else 0
+        }
+        
+        width_offset = (expected_size - img.width) // 2
+        height_offset = (expected_size - img.height) // 2
+
+        padded = pad(img, (width_offset, height_offset, width_offset, height_offset), fill=colors[color])
+
+        return padded.resize((args.resolution, args.resolution))
+
     def preprocess_train(examples):
         images = [image.convert("RGB") for image in examples[image_column]]
+        images = [resize_with_padding(image) for image in examples[image_column]]
         images = [image_transforms(image) for image in images]
 
         conditioning_images = [image.convert("RGB") for image in examples[conditioning_image_column]]
+        conditioning_images = [resize_with_padding(image) for image in examples[conditioning_image_column]]
         conditioning_images = [conditioning_image_transforms(image) for image in conditioning_images]
 
         mask_images = [image.convert("L") for image in examples[mask_image_column]]
+        mask_images = [resize_with_padding(image, color='black') for image in examples[mask_image_column]]
         mask_images = [mask_image_transforms(image) for image in mask_images]
 
         examples["image"] = images
